@@ -60,4 +60,4 @@ class ModelNetwork(nn.Module):
         # compute next state
         next_state = self.hidden2next_state(hidden)
 
-        return reward, next_state
+        return next_state, reward
