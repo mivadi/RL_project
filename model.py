@@ -133,8 +133,6 @@ class DynaQ(object):
             state = random.choice(list(self.visited_pairs.keys()))
             action = random.choice(list(self.visited_pairs[state]))
             next_state, reward = self.model(state, action)
-            # print(next_state)
-            # print(reward)
             done = is_done(next_state)
             self.update_action_value_function(state, next_state, action, reward, done)
 
@@ -312,11 +310,14 @@ class DeepDynaQ(DynaQ):
     def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1):
         super(DeepDynaQ, self).__init__(env, planning_steps, discount_factor, lr, epsilon)
 
+        # TODO: models finetunen
+        num_hidden = 128
+
         # initialize neural network for Q-values
-        self.Q = QNetwork()
+        self.Q = QNetwork(num_hidden)
 
         # initialize neural network for model of environment
-        self.nn_model = ModelNetwork()
+        self.nn_model = ModelNetwork(num_hidden)
 
         # TODO: moeten we dit doen in de nn case?
         self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
@@ -414,6 +415,7 @@ class DeepDynaQ(DynaQ):
         # find predicted next state and reward
         pred_next_state, pred_reward = self.model(state, action)
 
+        # TODO: willen we deze smooth loss?
         # compute loss
         loss_next_state = F.smooth_l1_loss(pred_next_state, next_state)
         loss_reward = F.smooth_l1_loss(pred_reward, reward)
