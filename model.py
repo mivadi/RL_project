@@ -10,6 +10,8 @@ import random
 from abc import abstractmethod
 import gym
 
+import sys
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -317,7 +319,7 @@ class DeepDynaQ(DynaQ):
         # neural network forward function, returns action value
 
         # compute Q-values of current state
-        q_values = self.Q(torch.Tensor(state))
+        q_values = self.Q(torch.Tensor(state)).numpy()
 
         return q_values
 
@@ -358,6 +360,7 @@ if __name__ == "__main__":
     # test environment
     # env = WindyGridworldEnv()
     # import gym
+
     env = gym.envs.make("CartPole-v0")
 
     # uncomment to demonstrate Q learning
@@ -377,9 +380,16 @@ if __name__ == "__main__":
     discount_factor = 1
     epsilon = 0.2
 
-    dynaQ = TabularDynaQ(env,
-                         planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
-                         deterministic=False)
+    # print("hallo", sys.argv[1])
+
+    if len(sys.argv)>1 and sys.argv[1] == 'deep':
+        dynaQ = DeepDynaQ(env,
+                             planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon)
+    else:
+        dynaQ = TabularDynaQ(env,
+                             planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
+                             deterministic=False)
+
     dynaQ.learn_policy(200000)
 
     # plot results
@@ -393,22 +403,3 @@ if __name__ == "__main__":
     plt.plot(dynaQ.episode_lengths)
     plt.title('Episode lengths Tabular Dyna-Q (greedy)')  # NB: lengths == returns
     plt.show()
-
-
-    # Dyna Q
-    # n = 3
-    # learning_rate = 0.5
-    # discount_factor = 1.0
-    # epsilon = 0.1
-
-    # deepDynaQ = DeepDynaQ(env,
-    #                      planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon)
-    # deepDynaQ.learn_policy(1000)
-    #
-    # # We will help you with plotting this time
-    # plt.plot(deepDynaQ.episode_lengths)
-    # plt.title('Episode lengths Deep Dyna-Q')
-    # plt.show()
-    # plt.plot(deepDynaQ.total_rewards)
-    # plt.title('Episode returns Deep Dyna-Q')
-    # plt.show()
