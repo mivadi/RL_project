@@ -133,16 +133,16 @@ def q_learning(env, num_episodes, discount_factor=1.0, alpha=0.5, epsilon=0.1, Q
 
 def is_done(state):
 
+    # initialize values using CARTPOLE properties
     theta_threshold_radians = 12 * 2 * math.pi / 360
     x_threshold = 2.4
-    # print(state)
     x = state[0]
-    # print(x)
     theta = state[3]
-    # x, _, theta, _ = state
 
+    # terminate in case of one of the the following situations
     done = x < -x_threshold \
             or x > x_threshold \
             or theta < -theta_threshold_radians \
             or theta > theta_threshold_radians
+
     return bool(done)
