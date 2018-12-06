@@ -319,7 +319,7 @@ class DeepDynaQ(DynaQ):
         # neural network forward function, returns action value
 
         # compute Q-values of current state
-        q_values = self.Q(torch.Tensor(state)).numpy()
+        q_values = self.Q(torch.Tensor(state)).detach().numpy()
 
         return q_values
 
@@ -347,7 +347,7 @@ class DeepDynaQ(DynaQ):
         # compute reward and next state with model network
         reward, next_state = self.nn_model(state_action)
 
-        return reward, next_state
+        return reward.detach().numpy(), next_state.detach().numpy()
 
     def update_model(self, state, action, next_state, reward):
         # TODO: learn model network, gradient descent step, used in learn_policy function of base class
