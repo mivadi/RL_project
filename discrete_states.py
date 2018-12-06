@@ -1,6 +1,7 @@
 import argparse
 import numpy as np 
 
+
 def converge_state(old_state, edges, averages):
     new_state = np.zeros(len(old_state))
     
@@ -45,6 +46,7 @@ def converge_state(old_state, edges, averages):
 
     return new_state   
 
+
 def compute_bins(c_pos_bounds, c_vel_bounds, p_pos_bounds, p_vel_bounds, n_bins=10):
 
     c_pos_edges = np.linspace(c_pos_bounds[0], c_pos_bounds[1], n_bins+1)
@@ -71,6 +73,7 @@ def compute_bins(c_pos_bounds, c_vel_bounds, p_pos_bounds, p_vel_bounds, n_bins=
     all_values = [c_pos_values, c_vel_values, p_pos_values, p_vel_values]
 
     return all_edges, all_values
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
