@@ -313,20 +313,20 @@ class DeepDynaQ(DynaQ):
         # initialize neural network for model of environment
         self.nn_model = ModelNetwork()
 
+        # moet dit?
         self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
 
     def action_values(self, state):
         # neural network forward function, returns action value
 
         # compute Q-values of current state
-        q_values = self.Q(torch.Tensor(state)).detach().numpy()
+        q_values = self.Q(torch.Tensor(list(state))).detach().numpy()
 
         return q_values
 
     def action_value_function(self, state, action):
         # returns a value for a state-action pair from the NN (using self.Q)
 
-        print("action", action)
         # compute value of state-action pair
         action_value = self.action_values(state)[action]
 
@@ -341,17 +341,22 @@ class DeepDynaQ(DynaQ):
     def model(self, state, action):
         # neural network forward function, returns reward and next state
 
-        # concatenate the state and action (dim=1 since we are working with batches)
-        state_action = torch.cat((torch.Tensor(state), torch.Tensor(action)), 1)
+        # always without detach
+
+        # concatenate the state and action (dim=0 since we are not working with batches)
+        state_action = torch.cat((torch.Tensor(list(state)), torch.Tensor([action])), 0)
 
         # compute reward and next state with model network
         reward, next_state = self.nn_model(state_action)
 
-        return reward.detach().numpy(), next_state.detach().numpy()
+        return reward, next_state
 
     def update_model(self, state, action, next_state, reward):
         # TODO: learn model network, gradient descent step, used in learn_policy function of base class
         # raise NotImplementedError
+
+        # state, action are not tensor
+        # next_state, reward can be tensor
         pass
 
 
