@@ -5,7 +5,7 @@ from tqdm import tqdm as _tqdm
 from windy_gridworld import WindyGridworldEnv
 from gridworld import GridworldEnv
 from collections import defaultdict
-from helpers import make_epsilon_greedy_policy, q_learning
+from helpers import make_epsilon_greedy_policy, q_learning, is_done
 import random
 from abc import abstractmethod
 import gym
@@ -116,7 +116,7 @@ class DynaQ(object):
 
         next_state = tuple(converge_state(next_state, self.edges, self.averages))
 
-        self.update_action_value_function(state, next_state, action, reward)
+        self.update_action_value_function(state, next_state, action, reward, done)
 
         # copy state_tilde and action_tilde to be next steps.
         state = next_state
@@ -133,7 +133,10 @@ class DynaQ(object):
             state = random.choice(list(self.visited_pairs.keys()))
             action = random.choice(list(self.visited_pairs[state]))
             next_state, reward = self.model(state, action)
-            self.update_action_value_function(state, next_state, action, reward)
+            # print(next_state)
+            # print(reward)
+            done = is_done(next_state)
+            self.update_action_value_function(state, next_state, action, reward, done)
 
     @abstractmethod
     def action_value_function(self, state, action):
@@ -144,7 +147,7 @@ class DynaQ(object):
         raise NotImplementedError
 
     @abstractmethod
-    def update_action_value_function(self, state, next_state, action, reward):
+    def update_action_value_function(self, state, next_state, action, reward, done):
         raise NotImplementedError
 
     @abstractmethod
@@ -265,7 +268,9 @@ class TabularDynaQ(DynaQ):
     def action_value_function(self, state, action):
         return self.Q[state][action]
 
-    def update_action_value_function(self, state, next_state, action, reward):
+    def update_action_value_function(self, state, next_state, action, reward, done):
+
+        # TODO: done is extra argument; do we need to use it in this class?
 
         # get max action-value
         max_action_value = max([self.Q[next_state][a] for a in range(self.environment.action_space.n)])
@@ -316,27 +321,104 @@ class DeepDynaQ(DynaQ):
         # moet dit?
         self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
 
+        self.Q_optimizer = optim.Adam(self.Q.parameters(), lr)
+        self.model_optimizer = optim.Adam(self.nn_model.parameters(), lr)
+        self.discount_factor = discount_factor
+
+
     def action_values(self, state):
         # neural network forward function, returns action value
 
         # compute Q-values of current state
-        q_values = self.Q(torch.Tensor(list(state))).detach().numpy()
+
+        # if type(state) is tuple:
+        #     state = [state]
+        #
+        # print(state)
+
+        state = torch.tensor(list(state), dtype=torch.float)
+        # print(state)
+
+        # state = torch.tensor(list(state), dtype=torch.float)
+        q_values = self.Q(state).detach().numpy()
 
         return q_values
 
     def action_value_function(self, state, action):
         # returns a value for a state-action pair from the NN (using self.Q)
 
+        # input is already tensor
+
         # compute value of state-action pair
-        action_value = self.action_values(state)[action]
+        q_values = self.Q(state)
+
+        # case: no batch
+        action_value = q_values[action]
+        # case: batch
+        # action_values[torch.arange(0, state.size(0)), action]
 
         return action_value
 
-    def update_action_value_function(self, state, next_state, action, reward):
+    def compute_target(self, reward, next_state, done):
+        # done is a boolean (vector) that indicates if next_state is terminal (episode is done)
+
+        # calculate Q values next state for batch
+        action_values = self.Q(next_state)  # [B, 2]
+
+        # get max action values for batch
+        max_action_values, _ = action_values.max(dim=0)
+
+        # calculate targets
+        targets = reward + self.discount_factor * max_action_values
+
+        # targets for terminal state equals 0
+        targets[(done == 1)] = 0
+
+        return targets
+
+    def update_action_value_function(self, state, next_state, action, reward, done):
         # TODO: learn Q network (is used in Q-learning function of base class and planning function)
         # TODO: should be a gradient descent step I think?
         # raise NotImplementedError
-        pass
+
+        # if no batch
+        # if type(state) is tuple:
+        #     state = [state]
+        #     action = [action]
+        #     next_state = [next_state]
+        #     reward = [reward]
+        #     done = [done]
+
+        
+
+        # random transition batch is taken from experience replay memory
+        # transitions = memory.sample(batch_size)
+
+        # transition is a list of 4-tuples, instead we want 4 vectors (as torch.Tensor's)
+        # state, action, reward, next_state, done = zip(*transitions)
+
+
+        # convert to PyTorch and define types
+        state = torch.tensor(list(state), dtype=torch.float)
+        action = torch.tensor([action], dtype=torch.int64)  # Need 64 bit to use them as index
+        next_state = torch.tensor(list(next_state), dtype=torch.float)
+        reward = torch.tensor([reward], dtype=torch.float)
+        done = torch.tensor([done], dtype=torch.uint8)  # Boolean
+
+        # compute the q value
+        q_val = self.action_value_function(state, action)
+
+        with torch.no_grad():  # Don't compute gradient info for the target (semi-gradient)
+            target = self.compute_target(reward, next_state, done)
+
+        # loss is measured from error between current and newly expected Q values
+        loss = F.smooth_l1_loss(q_val, target)
+
+        # backpropagation of loss to Neural Network (PyTorch magic)
+        self.Q_optimizer.zero_grad()
+        loss.backward()
+        self.Q_optimizer.step()
+
 
     def model(self, state, action):
         # neural network forward function, returns reward and next state
@@ -347,9 +429,9 @@ class DeepDynaQ(DynaQ):
         state_action = torch.cat((torch.Tensor(list(state)), torch.Tensor([action])), 0)
 
         # compute reward and next state with model network
-        reward, next_state = self.nn_model(state_action)
+        next_state, reward = self.nn_model(state_action)
 
-        return reward, next_state
+        return next_state, reward
 
     def update_model(self, state, action, next_state, reward):
         # TODO: learn model network, gradient descent step, used in learn_policy function of base class
