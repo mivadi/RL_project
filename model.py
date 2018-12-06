@@ -33,8 +33,14 @@ class DynaQ(object):
 
         # initialize Q
         self.Q = None
+        self.edges = None
+        self.averages = None
 
         # initialize stats
+        self.episode_lengths = []
+        self.total_rewards = []
+
+    def reset_data(self):
         self.episode_lengths = []
         self.total_rewards = []
 
@@ -76,14 +82,14 @@ class DynaQ(object):
         action = random.choice(greedy_actions)
 
         # if number less than epsilon, get random other actions
-        if random_number <= self._epsilon:
+        if random_number < self._epsilon:
             all_actions = list(range(0, self.environment.action_space.n))
             if not len(greedy_actions) == self.environment.action_space.n:
                 action = random.choice(all_actions)
 
         return int(action)
 
-    def q_learning(self, policy, state):
+    def q_learning(self, state):
         """
         Tabular one-step Q-learning algorithm. Takes an action according to a current state and updates the action-value
         function accordingly.
@@ -95,7 +101,7 @@ class DynaQ(object):
         """
 
         # choose A from S using policy derived from Q (epsilon-greedy)
-        action = policy(state)
+        action = self.policy_fn(state)
 
         # take action, observe R, S'
         (next_state, reward, done, probability) = self.environment.step(int(action))
@@ -155,8 +161,8 @@ class DynaQ(object):
         # loop over steps (not episodes, see Dyna-Q algorithm in Sutton p. 164)
         for _ in _tqdm(range(num_steps)):
 
-            # perform Q-laerning state on current state with current policy
-            action, next_state, reward, done = self.q_learning(self.policy_fn, state)
+            # perform Q-learning state on current state with current policy
+            action, next_state, reward, done = self.q_learning(state)
 
             # save visited state-action pair
             self.add_state_action_pair(state, action)
@@ -177,6 +183,8 @@ class DynaQ(object):
                 state = next_state
             else:
                 # if done save episode length and reward and reset to 0, reset environment
+                running_episode_length += 1
+                running_reward += discount_factor ** (running_episode_length - 1) * reward
                 self.episode_lengths.append(running_episode_length)
                 self.total_rewards.append(running_reward)
                 running_episode_length, running_reward = 0, 0
@@ -184,21 +192,64 @@ class DynaQ(object):
                 state = tuple(converge_state(state, self.edges, self.averages))
         return
 
+    def test_model_greedy(self, num_episodes):
+
+        self.reset_data()
+
+        # make policy greedy
+        old_epsilon = self._epsilon
+        self.set_epsilon(0)
+
+        # loop over steps (not episodes, see Dyna-Q algorithm in Sutton p. 164)
+        for _ in _tqdm(range(num_episodes)):
+
+            done = False
+            state = self.environment.reset()
+            state = tuple(converge_state(state, self.edges, self.averages))
+
+            # keep track of performance
+            running_episode_length, running_reward = 0, 0
+
+            while not done:
+
+                # choose A from S using policy derived from Q (epsilon-greedy)
+                action = self.policy_fn(state)
+
+                # take action, observe R, S'
+                (next_state, reward, done, probability) = self.environment.step(int(action))
+
+                next_state = tuple(converge_state(next_state, self.edges, self.averages))
+
+                running_episode_length += 1
+                running_reward += discount_factor ** (running_episode_length - 1) * reward
+                state = next_state
+
+            # if done save episode length and reward and reset to 0, reset environment
+            self.episode_lengths.append(running_episode_length)
+            self.total_rewards.append(running_reward)
+
+        # make policy epsilon-greedy
+        self.set_epsilon(old_epsilon)
+
+        return
+
 
 class TabularDynaQ(DynaQ):
 
-    def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1):
+    def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1, deterministic=True):
         super(TabularDynaQ, self).__init__(env, planning_steps, discount_factor, lr, epsilon)
 
         # initialize the action-value function as a nested dictionary that maps state -> (action -> action-value)
         self.Q = defaultdict(lambda: np.zeros(env.action_space.n))
 
         # initialize the model as a nested dictionary that maps state -> (action -> (next_state, reward))
-        self.det_model = defaultdict(lambda: [None for _ in range(env.action_space.n)])
+        self.det_model = defaultdict(lambda: [{"total": 0} for _ in range(env.action_space.n)])
 
         # only once load the bins and values for making the continuos values discrete
         # compute_bins(c_pos_bounds, c_vel_bounds, p_pos_bounds, p_vel_bounds, n_bins=10):
         self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
+
+        self.deterministic = deterministic
 
     def action_values(self, state):
         return self.Q[state]
@@ -217,11 +268,30 @@ class TabularDynaQ(DynaQ):
         )
 
     def model(self, state, action):
-        return self.det_model[state][action]
+
+        if self.deterministic:
+            return self.det_model[state][action]
+        else:
+
+            choices, probabilities = [], []
+            for key, values in self.det_model[state][action].items():
+                if key != "total":
+                    probabilities.append(values["count"] / self.det_model[state][action]["total"])
+                    choices.append(key)
+            next_tup_idx = np.random.choice([i for i in range(len(choices))], 1, p=probabilities)[0]
+            return choices[next_tup_idx]
 
     def update_model(self, state, action, next_state, reward):
 
-        self.det_model[state][action] = (next_state, reward)
+        if self.deterministic:
+            self.det_model[state][action] = (next_state, reward)
+        else:
+            if (next_state, reward) not in self.det_model[state][action]:
+                self.det_model[state][action][(next_state, reward)] = {}
+                self.det_model[state][action][(next_state, reward)]["count"] = 1
+            else:
+                self.det_model[state][action][(next_state, reward)]["count"] += 1
+            self.det_model[state][action]["total"] += 1
 
 
 class DeepDynaQ(DynaQ):
@@ -258,7 +328,6 @@ if __name__ == "__main__":
     # import gym
     env = gym.envs.make("CartPole-v0")
 
-
     # uncomment to demonstrate Q learning
     # Q_q_learning, (episode_lengths_q_learning, episode_returns_q_learning) = q_learning(env, 1000)
     #
@@ -273,17 +342,22 @@ if __name__ == "__main__":
     # Dyna Q
     n = 3
     learning_rate = 0.5
-    discount_factor = 1.0
-    epsilon = 0.1
+    discount_factor = 1
+    epsilon = 0.2
 
     dynaQ = TabularDynaQ(env,
-                         planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon)
-    dynaQ.learn_policy(1000)
+                         planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
+                         deterministic=False)
+    dynaQ.learn_policy(200000)
 
-    # We will help you with plotting this time
+    # plot results
     plt.plot(dynaQ.episode_lengths)
-    plt.title('Episode lengths Tabular Dyna-Q')
+    plt.title('Episode lengths Tabular Dyna-Q (nongreedy)')  # NB: lengths == returns
     plt.show()
-    plt.plot(dynaQ.total_rewards)
-    plt.title('Episode returns Tabular Dyna-Q')
+
+    dynaQ.test_model_greedy(100)
+
+    # plot results
+    plt.plot(dynaQ.episode_lengths)
+    plt.title('Episode lengths Tabular Dyna-Q (greedy)')  # NB: lengths == returns
     plt.show()
