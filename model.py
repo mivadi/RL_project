@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from discrete_states import compute_bins, converge_state
 from tqdm import tqdm as _tqdm
 from windy_gridworld import WindyGridworldEnv
 from gridworld import GridworldEnv
@@ -7,6 +8,7 @@ from collections import defaultdict
 from helpers import make_epsilon_greedy_policy, q_learning
 import random
 from abc import abstractmethod
+import gym
 
 
 class DynaQ(object):
@@ -79,6 +81,8 @@ class DynaQ(object):
         # take action, observe R, S'
         (next_state, reward, done, probability) = self.environment.step(int(action))
 
+        next_state = tuple(converge_state(next_state, self.edges, self.averages))
+
         self.update_action_value_function(state, next_state, action, reward)
 
         # copy state_tilde and action_tilde to be next steps.
@@ -122,8 +126,9 @@ class DynaQ(object):
 
         # one step tabular Q-learning
         policy = make_epsilon_greedy_policy(self.Q, self._epsilon, self.environment.action_space.n)
+        
         state = self.environment.reset()
-
+        state = tuple(converge_state(state, self.edges, self.averages))
         # keep track of performance
         running_episode_length, running_reward = 0, 0
 
@@ -151,12 +156,12 @@ class DynaQ(object):
                 running_reward += discount_factor ** (running_episode_length - 1) * reward
                 state = next_state
             else:
-
                 # if done save episode length and reward and reset to 0, reset environment
                 self.episode_lengths.append(running_episode_length)
                 self.total_rewards.append(running_reward)
                 running_episode_length, running_reward = 0, 0
                 state = self.environment.reset()
+                state = tuple(converge_state(state, self.edges, self.averages))
         return
 
 
@@ -170,6 +175,10 @@ class TabularDynaQ(DynaQ):
 
         # initialize the model as a nested dictionary that maps state -> (action -> (next_state, reward))
         self.det_model = defaultdict(lambda: [None for _ in range(env.action_space.n)])
+
+        # only once load the bins and values for making the continuos values discrete
+        # compute_bins(c_pos_bounds, c_vel_bounds, p_pos_bounds, p_vel_bounds, n_bins=10):
+        self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
 
     def action_value_function(self, state, action):
         return self.Q[state][action]
@@ -218,7 +227,10 @@ class DeepDynaQ(DynaQ):
 if __name__ == "__main__":
 
     # test environment
-    env = WindyGridworldEnv()
+    # env = WindyGridworldEnv()
+    # import gym
+    env = gym.envs.make("CartPole-v0")
+
 
     # uncomment to demonstrate Q learning
     # Q_q_learning, (episode_lengths_q_learning, episode_returns_q_learning) = q_learning(env, 1000)
