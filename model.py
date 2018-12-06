@@ -64,6 +64,25 @@ class DynaQ(object):
             self.pair_count += 1
         self.visited_pairs[state].add(action)
 
+    def policy_fn(self, state):
+
+        # get random number
+        random_number = random.uniform(0, 1)
+
+        # get actions with maximum value
+        greedy_actions = np.argwhere(self.action_values(state) == np.amax(self.action_values(state))).squeeze()
+        if not len(greedy_actions.shape):
+            greedy_actions = [greedy_actions]
+        action = random.choice(greedy_actions)
+
+        # if number less than epsilon, get random other actions
+        if random_number <= self._epsilon:
+            all_actions = list(range(0, self.environment.action_space.n))
+            if not len(greedy_actions) == self.environment.action_space.n:
+                action = random.choice(all_actions)
+
+        return int(action)
+
     def q_learning(self, policy, state):
         """
         Tabular one-step Q-learning algorithm. Takes an action according to a current state and updates the action-value
@@ -107,6 +126,10 @@ class DynaQ(object):
         raise NotImplementedError
 
     @abstractmethod
+    def action_values(self, state):
+        raise NotImplementedError
+
+    @abstractmethod
     def update_action_value_function(self, state, next_state, action, reward):
         raise NotImplementedError
 
@@ -124,9 +147,6 @@ class DynaQ(object):
         :param num_steps: number of steps to perform search (NB; != number of episodes)
         """
 
-        # one step tabular Q-learning
-        policy = make_epsilon_greedy_policy(self.Q, self._epsilon, self.environment.action_space.n)
-        
         state = self.environment.reset()
         state = tuple(converge_state(state, self.edges, self.averages))
         # keep track of performance
@@ -136,7 +156,7 @@ class DynaQ(object):
         for _ in _tqdm(range(num_steps)):
 
             # perform Q-laerning state on current state with current policy
-            action, next_state, reward, done = self.q_learning(policy, state)
+            action, next_state, reward, done = self.q_learning(self.policy_fn, state)
 
             # save visited state-action pair
             self.add_state_action_pair(state, action)
@@ -180,6 +200,9 @@ class TabularDynaQ(DynaQ):
         # compute_bins(c_pos_bounds, c_vel_bounds, p_pos_bounds, p_vel_bounds, n_bins=10):
         self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
 
+    def action_values(self, state):
+        return self.Q[state]
+
     def action_value_function(self, state, action):
         return self.Q[state][action]
 
@@ -206,8 +229,12 @@ class DeepDynaQ(DynaQ):
     def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1):
         super(DeepDynaQ, self).__init__(env, planning_steps, discount_factor, lr, epsilon)
 
-    def action_value_function(self, state, action):
+    def action_values(self, state):
         # TODO: implement neural network forward function, should return action value
+        raise NotImplementedError
+
+    def action_value_function(self, state, action):
+        # TODO: should return a value for a state-action pair from the NN (using self.Q)
         raise NotImplementedError
 
     def update_action_value_function(self, state, next_state, action, reward):
