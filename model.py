@@ -229,32 +229,58 @@ class TabularDynaQ(DynaQ):
 
         self.det_model[state][action] = (next_state, reward)
 
-
+# Q: gaat het goed met tensors
 class DeepDynaQ(DynaQ):
 
     def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1):
         super(DeepDynaQ, self).__init__(env, planning_steps, discount_factor, lr, epsilon)
 
+        # initialize neural network for Q-values
+        self.Q = QNetwork()
+
+        # initialize neural network for model of environment
+        self.nn_model = ModelNetwork()
+
+        self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
+
     def action_values(self, state):
-        # TODO: implement neural network forward function, should return action value
-        raise NotImplementedError
+        # neural network forward function, returns action value
+
+        # compute Q-values of current state
+        q_values = self.Q(torch.Tensor(state))
+
+        return q_values
 
     def action_value_function(self, state, action):
-        # TODO: should return a value for a state-action pair from the NN (using self.Q)
-        raise NotImplementedError
+        # returns a value for a state-action pair from the NN (using self.Q)
+
+        print("action", action)
+        # compute value of state-action pair
+        action_value = self.action_values(state)[action]
+
+        return action_value
 
     def update_action_value_function(self, state, next_state, action, reward):
         # TODO: learn Q network (is used in Q-learning function of base class and planning function)
         # TODO: should be a gradient descent step I think?
-        raise NotImplementedError
+        # raise NotImplementedError
+        pass
 
     def model(self, state, action):
-        # TODO: implement neural network forward function, should return reward and next state
-        raise NotImplementedError
+        # neural network forward function, returns reward and next state
+
+        # concatenate the state and action (dim=1 since we are working with batches)
+        state_action = torch.cat((torch.Tensor(state), torch.Tensor(action)), 1)
+
+        # compute reward and next state with model network
+        reward, next_state = self.nn_model(state_action)
+
+        return reward, next_state
 
     def update_model(self, state, action, next_state, reward):
         # TODO: learn model network, gradient descent step, used in learn_policy function of base class
-        raise NotImplementedError
+        # raise NotImplementedError
+        pass
 
 
 if __name__ == "__main__":
@@ -293,3 +319,22 @@ if __name__ == "__main__":
     plt.plot(dynaQ.total_rewards)
     plt.title('Episode returns Tabular Dyna-Q')
     plt.show()
+
+
+    # Dyna Q
+    # n = 3
+    # learning_rate = 0.5
+    # discount_factor = 1.0
+    # epsilon = 0.1
+
+    # deepDynaQ = DeepDynaQ(env,
+    #                      planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon)
+    # deepDynaQ.learn_policy(1000)
+    #
+    # # We will help you with plotting this time
+    # plt.plot(deepDynaQ.episode_lengths)
+    # plt.title('Episode lengths Deep Dyna-Q')
+    # plt.show()
+    # plt.plot(deepDynaQ.total_rewards)
+    # plt.title('Episode returns Deep Dyna-Q')
+    # plt.show()
