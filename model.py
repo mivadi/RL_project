@@ -299,6 +299,7 @@ class TabularDynaQ(DynaQ):
                 self.det_model[state][action][(next_state, reward)]["count"] += 1
             self.det_model[state][action]["total"] += 1
 
+
 # Q: gaat het goed met tensors
 class DeepDynaQ(DynaQ):
 
