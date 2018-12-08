@@ -29,6 +29,10 @@ class DynaQ(object):
         # set environment
         self.environment = env
 
+        # only once load the bins and values for making the continuos values discrete
+        # compute_bins(c_pos_bounds, c_vel_bounds, p_pos_bounds, p_vel_bounds, n_bins=10):
+        self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
+
         # set parameters
         self._discount_factor = discount_factor
         self._learning_rate = lr
@@ -254,10 +258,6 @@ class TabularDynaQ(DynaQ):
         # initialize the model as a nested dictionary that maps state -> (action -> (next_state, reward))
         self.det_model = defaultdict(lambda: [{"total": 0} for _ in range(env.action_space.n)])
 
-        # only once load the bins and values for making the continuos values discrete
-        # compute_bins(c_pos_bounds, c_vel_bounds, p_pos_bounds, p_vel_bounds, n_bins=10):
-        self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
-
         self.deterministic = deterministic
 
     def action_values(self, state):
@@ -317,6 +317,9 @@ class DeepDynaQ(DynaQ):
         # initialize neural network for Q-values
         self.Q = QNetwork(num_hidden)
 
+        # initialize the model as a nested dictionary that maps state -> (action -> (next_state, reward))
+        self.reward_model = defaultdict(lambda: [None for _ in range(env.action_space.n)])
+
         # initialize neural network for model of environment
         self.nn_model = ModelNetwork(num_hidden)
 
@@ -326,7 +329,6 @@ class DeepDynaQ(DynaQ):
         self.Q_optimizer = optim.Adam(self.Q.parameters(), lr)
         self.model_optimizer = optim.Adam(self.nn_model.parameters(), lr)
         self.discount_factor = discount_factor
-
 
     def action_values(self, state):
         # neural network forward function, returns action value
@@ -390,37 +392,41 @@ class DeepDynaQ(DynaQ):
         loss.backward()
         self.Q_optimizer.step()
 
-
     def model(self, state, action):
         # neural network forward function, returns reward and next state
 
         # convert to PyTorch and define types
         state = torch.tensor(list(state), dtype=torch.float)
-        action = torch.tensor([action], dtype=torch.float)
+        action_onehot = torch.zeros(1, 2, dtype=torch.float)
+        action_onehot[0][action] = 1
 
         # concatenate the state and action (dim=0 since we are not working with batches)
-        state_action = torch.cat((state, action), 0)
+        state_action = torch.cat((state.unsqueeze(0), action_onehot), 1)
 
         # compute reward and next state with model network
-        next_state, reward = self.nn_model(state_action)
-
-        return next_state, reward
+        next_state = self.nn_model(state_action)
+        state = tuple(converge_state(state, self.edges, self.averages))
+        return next_state, self.reward_model[state][int(action)]
 
     def update_model(self, state, action, next_state, reward):
         # learn model network, gradient descent step, used in learn_policy function of base class
 
         # convert to PyTorch and define types
         next_state = torch.tensor(list(next_state), dtype=torch.float)
-        reward = torch.tensor([reward], dtype=torch.float)
+        if isinstance(state, torch.FloatTensor):
+            state = state.tolist()
+            state = tuple(state)
+        temp_state = tuple(converge_state(state, self.edges, self.averages))
+        self.reward_model[tuple(temp_state)][int(action)] = reward
 
         # find predicted next state and reward
-        pred_next_state, pred_reward = self.model(state, action)
+        pred_next_state, _ = self.model(state, action)
 
         # TODO: willen we deze smooth loss?
         # compute loss
         loss_next_state = F.smooth_l1_loss(pred_next_state, next_state)
-        loss_reward = F.smooth_l1_loss(pred_reward, reward)
-        loss = loss_next_state + loss_reward
+        # loss_reward = F.smooth_l1_loss(pred_reward, reward)
+        loss = loss_next_state
 
         # backpropagation of loss to Neural Network (PyTorch magic)
         self.model_optimizer.zero_grad()
@@ -455,22 +461,22 @@ if __name__ == "__main__":
 
     if len(sys.argv)>1 and sys.argv[1] == 'deep':
         dynaQ = DeepDynaQ(env,
-                             planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon)
+                          planning_steps=n, discount_factor=discount_factor, lr=0.01, epsilon=epsilon)
     else:
         dynaQ = TabularDynaQ(env,
                              planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
                              deterministic=False)
 
-    dynaQ.learn_policy(200000)
+    dynaQ.learn_policy(10000)
 
     # plot results
     plt.plot(dynaQ.episode_lengths)
-    plt.title('Episode lengths Tabular Dyna-Q (nongreedy)')  # NB: lengths == returns
+    plt.title('Episode lengths Deep Dyna-Q (nongreedy)')  # NB: lengths == returns
     plt.show()
 
     dynaQ.test_model_greedy(100)
 
     # plot results
     plt.plot(dynaQ.episode_lengths)
-    plt.title('Episode lengths Tabular Dyna-Q (greedy)')  # NB: lengths == returns
+    plt.title('Episode lengths Deep Dyna-Q (greedy)')  # NB: lengths == returns
     plt.show()

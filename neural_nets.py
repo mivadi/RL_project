@@ -39,25 +39,18 @@ class ModelNetwork(nn.Module):
         nn.Module.__init__(self)
 
         state_dim = 4
-        action_dim = 1
-        reward_dim = 1
+        action_dim = 2
 
         self.experience2hidden = nn.Linear(state_dim + action_dim, num_hidden)
-        self.hidden2reward = nn.Linear(num_hidden, reward_dim)
         self.hidden2next_state = nn.Linear(num_hidden, state_dim)
-
-        # self.sigmoid = torch.sigmoid()
 
     def forward(self, state_action):
 
         # compute hidden with ReLU activation
         hidden = F.relu(self.experience2hidden(state_action))
 
-        # compute reward
-        reward = torch.sigmoid(self.hidden2reward(hidden))
-
         # Q: DO WE WANT BOUNDS FOR THE NEXT STATE?
         # compute next state
         next_state = self.hidden2next_state(hidden)
 
-        return next_state, reward
+        return next_state.squeeze()
