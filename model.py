@@ -323,7 +323,7 @@ class DeepDynaQ(DynaQ):
         # initialize neural network for model of environment
         self.nn_model = ModelNetwork(num_hidden)
 
-        # TODO: moeten we dit doen in de nn case?
+        # needed for saving rewards
         self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
 
         self.Q_optimizer = optim.Adam(self.Q.parameters(), lr)
@@ -381,13 +381,14 @@ class DeepDynaQ(DynaQ):
         # compute the q value
         q_val = self.action_value_function(state, action)
 
+        # TODO: true gradient proberen?
         with torch.no_grad():  # Don't compute gradient info for the target (semi-gradient)
             target = self.compute_target(reward, next_state, done)
 
         # loss is measured from error between current and newly expected Q values
         loss = F.smooth_l1_loss(q_val, target)
 
-        # backpropagation of loss to Neural Network (PyTorch magic)
+        # backpropagation of loss to Neural Network
         self.Q_optimizer.zero_grad()
         loss.backward()
         self.Q_optimizer.step()
@@ -413,9 +414,8 @@ class DeepDynaQ(DynaQ):
 
         # convert to PyTorch and define types
         next_state = torch.tensor(list(next_state), dtype=torch.float)
-        if isinstance(state, torch.FloatTensor):
-            state = state.tolist()
-            state = tuple(state)
+
+        # save reward
         temp_state = tuple(converge_state(state, self.edges, self.averages))
         self.reward_model[tuple(temp_state)][int(action)] = reward
 
@@ -425,7 +425,6 @@ class DeepDynaQ(DynaQ):
         # TODO: willen we deze smooth loss?
         # compute loss
         loss_next_state = F.smooth_l1_loss(pred_next_state, next_state)
-        # loss_reward = F.smooth_l1_loss(pred_reward, reward)
         loss = loss_next_state
 
         # backpropagation of loss to Neural Network (PyTorch magic)

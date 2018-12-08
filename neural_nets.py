@@ -41,7 +41,7 @@ class ModelNetwork(nn.Module):
         state_dim = 4
         action_dim = 2
 
-        self.experience2hidden = nn.Linear(state_dim + action_dim, num_hidden)
+        self.experience2hidden = nn.Linear(state_dim + action_dim, num_hidden)  # TODO: embedding miss?
         self.hidden2next_state = nn.Linear(num_hidden, state_dim)
 
     def forward(self, state_action):
@@ -49,7 +49,7 @@ class ModelNetwork(nn.Module):
         # compute hidden with ReLU activation
         hidden = F.relu(self.experience2hidden(state_action))
 
-        # Q: DO WE WANT BOUNDS FOR THE NEXT STATE?
+        # TODO: DO WE WANT BOUNDS FOR THE NEXT STATE?
         # compute next state
         next_state = self.hidden2next_state(hidden)
 
