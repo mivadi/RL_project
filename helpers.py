@@ -5,6 +5,40 @@ from tqdm import tqdm as _tqdm
 import math
 
 
+def get_epsilon(it):
+    if it < 1000:
+        return 1 - (it * 0.00095)
+    else:
+        return 0.05
+
+def smooth(x, N):
+    cumsum = np.cumsum(np.insert(x, 0, 0))
+    return (cumsum[N:] - cumsum[:-N]) / float(N)
+
+
+class ReplayMemory:
+
+    def __init__(self, capacity):
+        print('Capacity: ', capacity)
+        self.capacity = capacity
+        self.memory = []
+
+    def push(self, transition):
+        # check if memory doesn't exceed its capacity, otherwise delete first and keep last
+        if len(self.memory) < self.capacity:
+            self.memory.append(transition)
+        else:
+            del self.memory[0]
+            self.memory.append(transition)
+
+    def sample(self, batch_size):
+        random_sample = random.sample(self.memory, batch_size)
+        return random_sample
+
+    def __len__(self):
+        return len(self.memory)
+
+
 def make_epsilon_greedy_policy(Q, epsilon, nA):
     """
     Creates an epsilon-greedy policy based on a given Q-function and epsilon.

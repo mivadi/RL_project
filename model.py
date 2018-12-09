@@ -5,7 +5,6 @@ from tqdm import tqdm as _tqdm
 from windy_gridworld import WindyGridworldEnv
 from gridworld import GridworldEnv
 from collections import defaultdict
-from helpers import make_epsilon_greedy_policy, q_learning, is_done
 import random
 from abc import abstractmethod
 import gym
@@ -17,6 +16,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch import optim
 from neural_nets import QNetwork, ModelNetwork
+from helpers import q_learning, is_done, ReplayMemory, get_epsilon, smooth
 
 
 class DynaQ(object):
@@ -47,6 +47,8 @@ class DynaQ(object):
         self.Q = None
         self.edges = None
         self.averages = None
+        self.experience_replay = False
+        self.batch_size = 1
 
         # initialize stats
         self.episode_lengths = []
@@ -172,7 +174,9 @@ class DynaQ(object):
         running_episode_length, running_reward = 0, 0
 
         # loop over steps (not episodes, see Dyna-Q algorithm in Sutton p. 164)
-        for _ in _tqdm(range(num_steps)):
+        for step in _tqdm(range(num_steps)):
+
+            self.set_epsilon(get_epsilon(step))
 
             # perform Q-learning state on current state with current policy
             action, next_state, reward, done = self.q_learning(state)
@@ -269,7 +273,6 @@ class TabularDynaQ(DynaQ):
     def update_action_value_function(self, state, next_state, action, reward, done):
 
         # TODO: done is extra argument; do we need to use it in this class?
-
         # get max action-value
         max_action_value = max([self.Q[next_state][a] for a in range(self.environment.action_space.n)])
 
@@ -308,7 +311,8 @@ class TabularDynaQ(DynaQ):
 # Q: gaat het goed met tensors
 class DeepDynaQ(DynaQ):
 
-    def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1):
+    def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1, memory=None, true_gradient=False,
+                 experience_replay=True, batch_size=1):
         super(DeepDynaQ, self).__init__(env, planning_steps, discount_factor, lr, epsilon)
 
         # TODO: models finetunen
@@ -329,6 +333,10 @@ class DeepDynaQ(DynaQ):
         self.Q_optimizer = optim.Adam(self.Q.parameters(), lr)
         self.model_optimizer = optim.Adam(self.nn_model.parameters(), lr)
         self.discount_factor = discount_factor
+        self.experience_replay = experience_replay
+        self.memory = memory
+        self.true_gradient = true_gradient
+        self.batch_size = batch_size
 
     def action_values(self, state):
         # neural network forward function, returns action value
@@ -348,7 +356,7 @@ class DeepDynaQ(DynaQ):
         q_values = self.Q(state)
 
         # find action-value of current state-action pair
-        action_value = q_values[action]
+        action_value = q_values[torch.arange(0, state.size(0)), action]
 
         return action_value
 
@@ -359,7 +367,7 @@ class DeepDynaQ(DynaQ):
         action_values = self.Q(next_state)  # [B, 2]
 
         # get max action values for batch
-        max_action_values, _ = action_values.max(dim=0)
+        max_action_values, _ = action_values.max(dim=1)
 
         # calculate targets
         targets = reward + self.discount_factor * max_action_values
@@ -369,29 +377,57 @@ class DeepDynaQ(DynaQ):
 
         return targets
 
+    def smooth_l1_loss(self, input, target, beta=1, size_average=True):
+        """
+        very similar to the smooth_l1_loss from pytorch, but with
+        the extra beta parameter
+        """
+        n = torch.abs(input - target)
+        cond = n < beta
+        loss = torch.where(cond, 0.5 * n ** 2 / beta, n - 0.5 * beta)
+        if size_average:
+            return loss.mean()
+        return loss.sum()
+
     def update_action_value_function(self, state, next_state, action, reward, done):
 
+        if self.experience_replay:
+            if not isinstance(next_state, tuple):
+                next_state = tuple(next_state.tolist())
+            self.memory.push((state, action, reward, next_state, done))
+            if len(memory) < self.batch_size:
+                return
+            else:
+                # transition is a list of 4-tuples, instead we want 4 vectors (as torch.Tensor's)
+                transitions = self.memory.sample(self.batch_size)
+                state, action, reward, next_state, done = zip(*transitions)
+
         # convert to PyTorch and define types
-        state = torch.tensor(list(state), dtype=torch.float)
-        action = torch.tensor([action], dtype=torch.int64)  # Need 64 bit to use them as index
-        next_state = torch.tensor(list(next_state), dtype=torch.float)
-        reward = torch.tensor([reward], dtype=torch.float)
-        done = torch.tensor([done], dtype=torch.uint8)  # Boolean
+        state = torch.tensor(state, dtype=torch.float)
+        action = torch.tensor(action, dtype=torch.int64)  # Need 64 bit to use them as index
+        next_state = torch.tensor(next_state, dtype=torch.float)
+        reward = torch.tensor(reward, dtype=torch.float)
+        done = torch.tensor(done, dtype=torch.uint8)  # Boolean
 
         # compute the q value
         q_val = self.action_value_function(state, action)
 
         # TODO: true gradient proberen?
-        with torch.no_grad():  # Don't compute gradient info for the target (semi-gradient)
+        if not self.true_gradient:
+            with torch.no_grad():  # Don't compute gradient info for the target (semi-gradient)
+                target = self.compute_target(reward, next_state, done)
+        else:
             target = self.compute_target(reward, next_state, done)
 
         # loss is measured from error between current and newly expected Q values
-        loss = F.smooth_l1_loss(q_val, target)
+        loss = self.smooth_l1_loss(q_val, target)
 
         # backpropagation of loss to Neural Network
         self.Q_optimizer.zero_grad()
         loss.backward()
         self.Q_optimizer.step()
+
+        return
 
     def model(self, state, action):
         # neural network forward function, returns reward and next state
@@ -412,17 +448,16 @@ class DeepDynaQ(DynaQ):
     def update_model(self, state, action, next_state, reward):
         # learn model network, gradient descent step, used in learn_policy function of base class
 
-        # convert to PyTorch and define types
-        next_state = torch.tensor(list(next_state), dtype=torch.float)
-
         # save reward
         temp_state = tuple(converge_state(state, self.edges, self.averages))
         self.reward_model[tuple(temp_state)][int(action)] = reward
 
+        # convert to PyTorch and define types
+        next_state = torch.tensor(list(next_state), dtype=torch.float)
+
         # find predicted next state and reward
         pred_next_state, _ = self.model(state, action)
 
-        # TODO: willen we deze smooth loss?
         # compute loss
         loss_next_state = F.smooth_l1_loss(pred_next_state, next_state)
         loss = loss_next_state
@@ -435,47 +470,39 @@ class DeepDynaQ(DynaQ):
 
 if __name__ == "__main__":
 
-    # test environment
-    # env = WindyGridworldEnv()
-    # import gym
-
     env = gym.envs.make("CartPole-v0")
 
-    # uncomment to demonstrate Q learning
-    # Q_q_learning, (episode_lengths_q_learning, episode_returns_q_learning) = q_learning(env, 1000)
-    #
-    # # We will help you with plotting this time
-    # plt.plot(episode_lengths_q_learning)
-    # plt.title('Episode lengths Q-learning')
-    # plt.show()
-    # plt.plot(episode_returns_q_learning)
-    # plt.title('Episode returns Q-learning')
-    # plt.show()
-
     # Dyna Q
-    n = 3
+    n = 10
     learning_rate = 0.5
-    discount_factor = 1
+    discount_factor = .8
     epsilon = 0.2
+    capacity = 10000
+    experience_replay = True
+    true_gradient = False
+    batch_size = 64
 
-    if len(sys.argv)>1 and sys.argv[1] == 'deep':
+    if len(sys.argv) > 1 and sys.argv[1] == 'deep':
+        memory = ReplayMemory(capacity)
         dynaQ = DeepDynaQ(env,
-                          planning_steps=n, discount_factor=discount_factor, lr=0.01, epsilon=epsilon)
+                          planning_steps=n, discount_factor=discount_factor, lr=1e-3, epsilon=epsilon, memory=memory,
+                          experience_replay=experience_replay, true_gradient=true_gradient, batch_size=batch_size)
     else:
         dynaQ = TabularDynaQ(env,
                              planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
                              deterministic=False)
 
-    dynaQ.learn_policy(10000)
+    dynaQ.learn_policy(1000)
 
     # plot results
-    plt.plot(dynaQ.episode_lengths)
+    plt.plot(smooth(dynaQ.episode_lengths, 10))
     plt.title('Episode lengths Deep Dyna-Q (nongreedy)')  # NB: lengths == returns
     plt.show()
 
     dynaQ.test_model_greedy(100)
 
     # plot results
-    plt.plot(dynaQ.episode_lengths)
+    plt.plot(smooth(dynaQ.episode_lengths, 10))
+    print("Average episode length (greedy): {}".format(np.mean(np.array(dynaQ.episode_lengths))))
     plt.title('Episode lengths Deep Dyna-Q (greedy)')  # NB: lengths == returns
     plt.show()
