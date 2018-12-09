@@ -45,8 +45,6 @@ class DynaQ(object):
 
         # initialize Q
         self.Q = None
-        self.edges = None
-        self.averages = None
         self.experience_replay = False
         self.batch_size = 1
 
@@ -308,7 +306,6 @@ class TabularDynaQ(DynaQ):
             self.det_model[state][action]["total"] += 1
 
 
-# Q: gaat het goed met tensors
 class DeepDynaQ(DynaQ):
 
     def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1, memory=None, true_gradient=False,
@@ -326,9 +323,6 @@ class DeepDynaQ(DynaQ):
 
         # initialize neural network for model of environment
         self.nn_model = ModelNetwork(num_hidden)
-
-        # needed for saving rewards
-        self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
 
         self.Q_optimizer = optim.Adam(self.Q.parameters(), lr)
         self.model_optimizer = optim.Adam(self.nn_model.parameters(), lr)
@@ -440,9 +434,13 @@ class DeepDynaQ(DynaQ):
         # concatenate the state and action (dim=0 since we are not working with batches)
         state_action = torch.cat((state.unsqueeze(0), action_onehot), 1)
 
-        # compute reward and next state with model network
+        # compute next state with model network
         next_state = self.nn_model(state_action)
+
+        # TODO: moet hier next_state staan?
         state = tuple(converge_state(state, self.edges, self.averages))
+        # next_state = torch.tensor(converge_state(next_state, self.edges, self.averages))
+
         return next_state, self.reward_model[state][int(action)]
 
     def update_model(self, state, action, next_state, reward):
@@ -479,15 +477,17 @@ if __name__ == "__main__":
     epsilon = 0.2
     capacity = 10000
     experience_replay = True
-    true_gradient = False
+    true_gradient = True
     batch_size = 64
 
     if len(sys.argv) > 1 and sys.argv[1] == 'deep':
+        title = 'Episode lengths Deep Dyna-Q'
         memory = ReplayMemory(capacity)
         dynaQ = DeepDynaQ(env,
                           planning_steps=n, discount_factor=discount_factor, lr=1e-3, epsilon=epsilon, memory=memory,
                           experience_replay=experience_replay, true_gradient=true_gradient, batch_size=batch_size)
     else:
+        title = 'Episode lengths Tabular Dyna-Q'
         dynaQ = TabularDynaQ(env,
                              planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
                              deterministic=False)
@@ -496,7 +496,8 @@ if __name__ == "__main__":
 
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
-    plt.title('Episode lengths Deep Dyna-Q (nongreedy)')  # NB: lengths == returns
+    non_greedy_title = title + ' (nongreedy)'
+    plt.title(non_greedy_title)  # NB: lengths == returns
     plt.show()
 
     dynaQ.test_model_greedy(100)
@@ -504,5 +505,6 @@ if __name__ == "__main__":
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
     print("Average episode length (greedy): {}".format(np.mean(np.array(dynaQ.episode_lengths))))
-    plt.title('Episode lengths Deep Dyna-Q (greedy)')  # NB: lengths == returns
+    greedy_title = title + ' (greedy)'
+    plt.title(greedy_title)  # NB: lengths == returns
     plt.show()
