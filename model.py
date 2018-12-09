@@ -308,7 +308,7 @@ class TabularDynaQ(DynaQ):
 class DeepDynaQ(DynaQ):
 
     def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1, memory=None, true_gradient=False,
-                 experience_replay=True, batch_size=1):
+                 experience_replay=True, batch_size=1, model_batch=False):
         super(DeepDynaQ, self).__init__(env, planning_steps, discount_factor, lr, epsilon)
 
         # TODO: models finetunen
@@ -330,6 +330,7 @@ class DeepDynaQ(DynaQ):
         self.memory = memory
         self.true_gradient = true_gradient
         self.batch_size = batch_size
+        self.model_batch = model_batch
 
     def action_values(self, state):
         # neural network forward function, returns action value
@@ -428,7 +429,7 @@ class DeepDynaQ(DynaQ):
         # in case of updating the model, we use a batch
         batch = not np.shape(state)==(4,)
 
-        if batch:
+        if batch and self.model_batch:
             state = torch.tensor(state, dtype=torch.float)
             left_action = torch.zeros(len(action), 1, dtype=torch.float)
             right_action = torch.zeros(len(action), 1, dtype=torch.float)
@@ -451,11 +452,13 @@ class DeepDynaQ(DynaQ):
         # compute next state with model network
         next_state = self.nn_model(state_action)
 
-        if batch:
-            return next_state
+        if batch and self.model_batch:
+            rewards = None
         else:
             state = tuple(converge_state(state, self.edges, self.averages))
-            return next_state, self.reward_model[state][int(action)]
+            rewards = self.reward_model[state][int(action)]
+
+        return next_state, rewards
 
     def update_model(self, state, action, next_state, reward):
         # learn model network, gradient descent step, used in learn_policy function of base class
@@ -464,7 +467,7 @@ class DeepDynaQ(DynaQ):
         temp_state = tuple(converge_state(state, self.edges, self.averages))
         self.reward_model[tuple(temp_state)][int(action)] = reward
 
-        if self.experience_replay:
+        if self.model_batch:
             if not isinstance(next_state, tuple):
                 next_state = tuple(next_state.tolist())
             done = is_done(next_state)
@@ -477,10 +480,12 @@ class DeepDynaQ(DynaQ):
                 state, action, reward, next_state, done = zip(*transitions)
 
         # convert to PyTorch and define types
+        if not model_batch:
+            next_state = list(next_state)
         next_state = torch.tensor(next_state, dtype=torch.float)
 
         # find predicted next state and reward
-        pred_next_state = self.model(state, action)
+        pred_next_state, _ = self.model(state, action)
 
         # compute loss
         loss_next_state = F.smooth_l1_loss(pred_next_state, next_state)
@@ -507,20 +512,22 @@ if __name__ == "__main__":
     experience_replay = True
     true_gradient = True
     batch_size = 64
+    model_batch = True
+
 
     if len(sys.argv) > 1 and sys.argv[1] == 'deep':
         title = 'Episode lengths Deep Dyna-Q'
         memory = ReplayMemory(capacity)
         dynaQ = DeepDynaQ(env,
                           planning_steps=n, discount_factor=discount_factor, lr=1e-3, epsilon=epsilon, memory=memory,
-                          experience_replay=experience_replay, true_gradient=true_gradient, batch_size=batch_size)
+                          experience_replay=experience_replay, true_gradient=true_gradient, batch_size=batch_size, model_batch=model_batch)
     else:
         title = 'Episode lengths Tabular Dyna-Q'
         dynaQ = TabularDynaQ(env,
                              planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
                              deterministic=False)
 
-    dynaQ.learn_policy(100000)
+    dynaQ.learn_policy(1000)
 
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
@@ -528,7 +535,7 @@ if __name__ == "__main__":
     plt.title(non_greedy_title)  # NB: lengths == returns
     plt.show()
 
-    dynaQ.test_model_greedy(1000)
+    dynaQ.test_model_greedy(100)
 
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
