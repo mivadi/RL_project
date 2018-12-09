@@ -270,7 +270,6 @@ class TabularDynaQ(DynaQ):
 
     def update_action_value_function(self, state, next_state, action, reward, done):
 
-        # TODO: done is extra argument; do we need to use it in this class?
         # get max action-value
         max_action_value = max([self.Q[next_state][a] for a in range(self.environment.action_space.n)])
 
@@ -406,7 +405,6 @@ class DeepDynaQ(DynaQ):
         # compute the q value
         q_val = self.action_value_function(state, action)
 
-        # TODO: true gradient proberen?
         if not self.true_gradient:
             with torch.no_grad():  # Don't compute gradient info for the target (semi-gradient)
                 target = self.compute_target(reward, next_state, done)
@@ -426,22 +424,38 @@ class DeepDynaQ(DynaQ):
     def model(self, state, action):
         # neural network forward function, returns reward and next state
 
-        # convert to PyTorch and define types
-        state = torch.tensor(list(state), dtype=torch.float)
-        action_onehot = torch.zeros(1, 2, dtype=torch.float)
-        action_onehot[0][action] = 1
+        # in case of planning, we don't use a batch
+        # in case of updating the model, we use a batch
+        batch = not np.shape(state)==(4,)
 
-        # concatenate the state and action (dim=0 since we are not working with batches)
-        state_action = torch.cat((state.unsqueeze(0), action_onehot), 1)
+        if batch:
+            state = torch.tensor(state, dtype=torch.float)
+            left_action = torch.zeros(len(action), 1, dtype=torch.float)
+            right_action = torch.zeros(len(action), 1, dtype=torch.float)
+            left_action[(action == 0)] = 1
+            right_action[(action == 1)] = 1
+            action_onehot = torch.cat((left_action, right_action), 1)
+
+            # concatenate the state and action (dim=0 since we are not working with batches)
+            state_action = torch.cat((state, action_onehot), 1)
+
+        # convert to PyTorch and define types
+        else:
+            state = torch.tensor(list(state), dtype=torch.float)
+            action_onehot = torch.zeros(1, 2, dtype=torch.float)
+            action_onehot[0][action] = 1
+
+            # concatenate the state and action (dim=0 since we are not working with batches)
+            state_action = torch.cat((state.unsqueeze(0), action_onehot), 1)
 
         # compute next state with model network
         next_state = self.nn_model(state_action)
 
-        # TODO: moet hier next_state staan?
-        state = tuple(converge_state(state, self.edges, self.averages))
-        # next_state = torch.tensor(converge_state(next_state, self.edges, self.averages))
-
-        return next_state, self.reward_model[state][int(action)]
+        if batch:
+            return next_state
+        else:
+            state = tuple(converge_state(state, self.edges, self.averages))
+            return next_state, self.reward_model[state][int(action)]
 
     def update_model(self, state, action, next_state, reward):
         # learn model network, gradient descent step, used in learn_policy function of base class
@@ -450,11 +464,23 @@ class DeepDynaQ(DynaQ):
         temp_state = tuple(converge_state(state, self.edges, self.averages))
         self.reward_model[tuple(temp_state)][int(action)] = reward
 
+        if self.experience_replay:
+            if not isinstance(next_state, tuple):
+                next_state = tuple(next_state.tolist())
+            done = is_done(next_state)
+            self.memory.push((state, action, reward, next_state, done))
+            if len(memory) < self.batch_size:
+                return
+            else:
+                # transition is a list of 4-tuples, instead we want 4 vectors (as torch.Tensor's)
+                transitions = self.memory.sample(self.batch_size)
+                state, action, reward, next_state, done = zip(*transitions)
+
         # convert to PyTorch and define types
-        next_state = torch.tensor(list(next_state), dtype=torch.float)
+        next_state = torch.tensor(next_state, dtype=torch.float)
 
         # find predicted next state and reward
-        pred_next_state, _ = self.model(state, action)
+        pred_next_state = self.model(state, action)
 
         # compute loss
         loss_next_state = F.smooth_l1_loss(pred_next_state, next_state)
@@ -464,6 +490,8 @@ class DeepDynaQ(DynaQ):
         self.model_optimizer.zero_grad()
         loss.backward()
         self.model_optimizer.step()
+
+        return
 
 
 if __name__ == "__main__":
@@ -492,7 +520,7 @@ if __name__ == "__main__":
                              planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
                              deterministic=False)
 
-    dynaQ.learn_policy(1000)
+    dynaQ.learn_policy(100000)
 
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
@@ -500,7 +528,7 @@ if __name__ == "__main__":
     plt.title(non_greedy_title)  # NB: lengths == returns
     plt.show()
 
-    dynaQ.test_model_greedy(100)
+    dynaQ.test_model_greedy(1000)
 
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
