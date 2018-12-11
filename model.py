@@ -174,7 +174,8 @@ class DynaQ(object):
         # loop over steps (not episodes, see Dyna-Q algorithm in Sutton p. 164)
         for step in _tqdm(range(num_steps)):
 
-            self.set_epsilon(get_epsilon(step))
+            if self._epsilon is None:
+                self.set_epsilon(get_epsilon(step))
 
             # perform Q-learning state on current state with current policy
             action, next_state, reward, done = self.q_learning(state)
@@ -507,7 +508,7 @@ if __name__ == "__main__":
     n = 10
     learning_rate = 0.5
     discount_factor = .8
-    epsilon = 0.2
+    # epsilon = 0.2
     capacity = 10000
     experience_replay = True
     true_gradient = True
@@ -518,15 +519,15 @@ if __name__ == "__main__":
         title = 'Episode lengths Deep Dyna-Q'
         memory = ReplayMemory(capacity)
         dynaQ = DeepDynaQ(env,
-                          planning_steps=n, discount_factor=discount_factor, lr=1e-3, epsilon=epsilon, memory=memory,
+                          planning_steps=n, discount_factor=discount_factor, lr=1e-3, epsilon=None, memory=memory,
                           experience_replay=experience_replay, true_gradient=true_gradient, batch_size=batch_size, model_batch=model_batch)
     else:
         title = 'Episode lengths Tabular Dyna-Q'
         dynaQ = TabularDynaQ(env,
-                             planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
+                             planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=0.2,
                              deterministic=False)
 
-    dynaQ.learn_policy(1000)
+    dynaQ.learn_policy(10000)
 
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
