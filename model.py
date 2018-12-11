@@ -88,7 +88,9 @@ class DynaQ(object):
         random_number = random.uniform(0, 1)
 
         # get actions with maximum value
-        greedy_actions = np.argwhere(self.action_values(state) == np.amax(self.action_values(state))).squeeze()
+        action_vals = self.action_values(state).squeeze()
+        max_action_val = np.amax(action_vals).squeeze()
+        greedy_actions = np.argwhere(action_vals == max_action_val).squeeze()
         if not len(greedy_actions.shape):
             greedy_actions = [greedy_actions]
         action = random.choice(greedy_actions)
@@ -166,14 +168,17 @@ class DynaQ(object):
         :param num_steps: number of steps to perform search (NB; != number of episodes)
         """
 
+        # get start state and converge it
         state = self.environment.reset()
         state = tuple(converge_state(state, self.edges, self.averages))
+
         # keep track of performance
         running_episode_length, running_reward = 0, 0
 
         # loop over steps (not episodes, see Dyna-Q algorithm in Sutton p. 164)
         for step in _tqdm(range(num_steps)):
 
+            # set epsilon
             if self._epsilon is None:
                 self.set_epsilon(get_epsilon(step))
 
@@ -190,17 +195,17 @@ class DynaQ(object):
             if self.pair_count >= self._planning_steps:
                 self.planning()
 
+            # increment steps and update reward
+            running_episode_length += 1
+            running_reward += discount_factor ** (running_episode_length - 1) * reward
+
             # check if episode done
             if not done:
 
-                # if not done increment steps, update reward and update state
-                running_episode_length += 1
-                running_reward += discount_factor ** (running_episode_length - 1) * reward
+                # if not done update state
                 state = next_state
             else:
                 # if done save episode length and reward and reset to 0, reset environment
-                running_episode_length += 1
-                running_reward += discount_factor ** (running_episode_length - 1) * reward
                 self.episode_lengths.append(running_episode_length)
                 self.total_rewards.append(running_reward)
                 running_episode_length, running_reward = 0, 0
@@ -284,7 +289,6 @@ class TabularDynaQ(DynaQ):
         if self.deterministic:
             return self.det_model[state][action]
         else:
-
             choices, probabilities = [], []
             for key, values in self.det_model[state][action].items():
                 if key != "total":
@@ -312,7 +316,6 @@ class DeepDynaQ(DynaQ):
                  experience_replay=True, batch_size=1, model_batch=False):
         super(DeepDynaQ, self).__init__(env, planning_steps, discount_factor, lr, epsilon)
 
-        # TODO: models finetunen
         num_hidden = 128
 
         # initialize neural network for Q-values
@@ -334,7 +337,8 @@ class DeepDynaQ(DynaQ):
         self.model_batch = model_batch
 
     def action_values(self, state):
-        # neural network forward function, returns action value
+        # should take state and return Q values for that state
+        # only used in policy function
 
         # convert to PyTorch and define types
         state = torch.tensor(list(state), dtype=torch.float)
@@ -385,6 +389,7 @@ class DeepDynaQ(DynaQ):
         return loss.sum()
 
     def update_action_value_function(self, state, next_state, action, reward, done):
+        # should update Q network from experience
 
         if self.experience_replay:
             if not isinstance(next_state, tuple):
@@ -430,36 +435,25 @@ class DeepDynaQ(DynaQ):
         # in case of updating the model, we use a batch
         batch = not np.shape(state)==(4,)
 
-        if batch and self.model_batch:
-            state = torch.tensor(state, dtype=torch.float)
-            left_action = torch.zeros(len(action), 1, dtype=torch.float)
-            right_action = torch.zeros(len(action), 1, dtype=torch.float)
-            left_action[(action == 0)] = 1
-            right_action[(action == 1)] = 1
-            action_onehot = torch.cat((left_action, right_action), 1)
-
-            # concatenate the state and action (dim=0 since we are not working with batches)
-            state_action = torch.cat((state, action_onehot), 1)
-
-        # convert to PyTorch and define types
+        # get reward if no batch (only need reward during planning and batchsize always 1 in this case)
+        if not batch:
+            temp_state = tuple(converge_state(state, self.edges, self.averages))
+            rewards = self.reward_model[temp_state][int(action)]
         else:
-            state = torch.tensor(list(state), dtype=torch.float)
-            action_onehot = torch.zeros(1, 2, dtype=torch.float)
-            action_onehot[0][action] = 1
+            rewards = None
 
-            # concatenate the state and action (dim=0 since we are not working with batches)
-            state_action = torch.cat((state.unsqueeze(0), action_onehot), 1)
+        state = torch.tensor(list(state), dtype=torch.float)
+        if not batch:
+            action = tuple([action])
+            state = state.unsqueeze(0)
+        action_onehot = torch.zeros(len(state), 2)
+        action_onehot[torch.arange(0, len(state)), torch.tensor(list(action))] = 1
+        state_action = torch.cat((state, action_onehot), 1)
 
         # compute next state with model network
         next_state = self.nn_model(state_action)
 
-        if batch and self.model_batch:
-            rewards = None
-        else:
-            state = tuple(converge_state(state, self.edges, self.averages))
-            rewards = self.reward_model[state][int(action)]
-
-        return next_state, rewards
+        return next_state.squeeze(), rewards
 
     def update_model(self, state, action, next_state, reward):
         # learn model network, gradient descent step, used in learn_policy function of base class
@@ -489,7 +483,9 @@ class DeepDynaQ(DynaQ):
         pred_next_state, _ = self.model(state, action)
 
         # compute loss
-        loss_next_state = F.smooth_l1_loss(pred_next_state, next_state)
+        loss_fn = nn.MSELoss()
+        next_state = next_state.squeeze()
+        loss_next_state = loss_fn(pred_next_state, next_state.squeeze())
         loss = loss_next_state
 
         # backpropagation of loss to Neural Network (PyTorch magic)
@@ -502,18 +498,18 @@ class DeepDynaQ(DynaQ):
 
 if __name__ == "__main__":
 
+    # initialize the environment
     env = gym.envs.make("CartPole-v0")
 
-    # Dyna Q
+    # Dyna Q parameters
     n = 10
     learning_rate = 0.5
     discount_factor = .8
-    # epsilon = 0.2
     capacity = 10000
     experience_replay = True
-    true_gradient = True
+    true_gradient = False
     batch_size = 64
-    model_batch = True
+    model_batch = False
 
     if len(sys.argv) > 1 and sys.argv[1] == 'deep':
         title = 'Episode lengths Deep Dyna-Q'
@@ -527,7 +523,7 @@ if __name__ == "__main__":
                              planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=0.2,
                              deterministic=False)
 
-    dynaQ.learn_policy(10000)
+    dynaQ.learn_policy(2000)
 
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
