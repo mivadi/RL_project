@@ -18,6 +18,11 @@ from torch import optim
 from neural_nets import QNetwork, ModelNetwork
 from helpers import q_learning, is_done, ReplayMemory, get_epsilon, smooth
 
+# define seed
+seed = 1
+random.seed(seed)
+torch.manual_seed(seed)
+
 
 class DynaQ(object):
     """
@@ -85,6 +90,7 @@ class DynaQ(object):
     def policy_fn(self, state):
 
         # get random number
+        # random.seed(seed)
         random_number = random.uniform(0, 1)
 
         # get actions with maximum value
@@ -510,6 +516,8 @@ if __name__ == "__main__":
     true_gradient = False
     batch_size = 64
     model_batch = False
+
+    env.seed(seed)
 
     if len(sys.argv) > 1 and sys.argv[1] == 'deep':
         title = 'Episode lengths Deep Dyna-Q'

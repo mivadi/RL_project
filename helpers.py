@@ -4,6 +4,8 @@ from collections import defaultdict
 from tqdm import tqdm as _tqdm
 import math
 
+seed = 1
+random.seed(seed)
 
 def get_epsilon(it):
     if it < 1000:
