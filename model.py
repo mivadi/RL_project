@@ -45,8 +45,6 @@ class DynaQ(object):
 
         # initialize Q
         self.Q = None
-        self.edges = None
-        self.averages = None
         self.experience_replay = False
         self.batch_size = 1
 
@@ -272,7 +270,6 @@ class TabularDynaQ(DynaQ):
 
     def update_action_value_function(self, state, next_state, action, reward, done):
 
-        # TODO: done is extra argument; do we need to use it in this class?
         # get max action-value
         max_action_value = max([self.Q[next_state][a] for a in range(self.environment.action_space.n)])
 
@@ -308,11 +305,10 @@ class TabularDynaQ(DynaQ):
             self.det_model[state][action]["total"] += 1
 
 
-# Q: gaat het goed met tensors
 class DeepDynaQ(DynaQ):
 
     def __init__(self, env, planning_steps=1, discount_factor=1., lr=0.5, epsilon=0.1, memory=None, true_gradient=False,
-                 experience_replay=True, batch_size=1):
+                 experience_replay=True, batch_size=1, model_batch=False):
         super(DeepDynaQ, self).__init__(env, planning_steps, discount_factor, lr, epsilon)
 
         # TODO: models finetunen
@@ -327,9 +323,6 @@ class DeepDynaQ(DynaQ):
         # initialize neural network for model of environment
         self.nn_model = ModelNetwork(num_hidden)
 
-        # needed for saving rewards
-        self.edges, self.averages = compute_bins([-2.4, 2.4], [-1.5, 1.5], [-0.21, 0.21], [-1.5, 1.5])
-
         self.Q_optimizer = optim.Adam(self.Q.parameters(), lr)
         self.model_optimizer = optim.Adam(self.nn_model.parameters(), lr)
         self.discount_factor = discount_factor
@@ -337,6 +330,7 @@ class DeepDynaQ(DynaQ):
         self.memory = memory
         self.true_gradient = true_gradient
         self.batch_size = batch_size
+        self.model_batch = model_batch
 
     def action_values(self, state):
         # neural network forward function, returns action value
@@ -412,7 +406,6 @@ class DeepDynaQ(DynaQ):
         # compute the q value
         q_val = self.action_value_function(state, action)
 
-        # TODO: true gradient proberen?
         if not self.true_gradient:
             with torch.no_grad():  # Don't compute gradient info for the target (semi-gradient)
                 target = self.compute_target(reward, next_state, done)
@@ -432,18 +425,40 @@ class DeepDynaQ(DynaQ):
     def model(self, state, action):
         # neural network forward function, returns reward and next state
 
+        # in case of planning, we don't use a batch
+        # in case of updating the model, we use a batch
+        batch = not np.shape(state)==(4,)
+
+        if batch and self.model_batch:
+            state = torch.tensor(state, dtype=torch.float)
+            left_action = torch.zeros(len(action), 1, dtype=torch.float)
+            right_action = torch.zeros(len(action), 1, dtype=torch.float)
+            left_action[(action == 0)] = 1
+            right_action[(action == 1)] = 1
+            action_onehot = torch.cat((left_action, right_action), 1)
+
+            # concatenate the state and action (dim=0 since we are not working with batches)
+            state_action = torch.cat((state, action_onehot), 1)
+
         # convert to PyTorch and define types
-        state = torch.tensor(list(state), dtype=torch.float)
-        action_onehot = torch.zeros(1, 2, dtype=torch.float)
-        action_onehot[0][action] = 1
+        else:
+            state = torch.tensor(list(state), dtype=torch.float)
+            action_onehot = torch.zeros(1, 2, dtype=torch.float)
+            action_onehot[0][action] = 1
 
-        # concatenate the state and action (dim=0 since we are not working with batches)
-        state_action = torch.cat((state.unsqueeze(0), action_onehot), 1)
+            # concatenate the state and action (dim=0 since we are not working with batches)
+            state_action = torch.cat((state.unsqueeze(0), action_onehot), 1)
 
-        # compute reward and next state with model network
+        # compute next state with model network
         next_state = self.nn_model(state_action)
-        state = tuple(converge_state(state, self.edges, self.averages))
-        return next_state, self.reward_model[state][int(action)]
+
+        if batch and self.model_batch:
+            rewards = None
+        else:
+            state = tuple(converge_state(state, self.edges, self.averages))
+            rewards = self.reward_model[state][int(action)]
+
+        return next_state, rewards
 
     def update_model(self, state, action, next_state, reward):
         # learn model network, gradient descent step, used in learn_policy function of base class
@@ -452,8 +467,22 @@ class DeepDynaQ(DynaQ):
         temp_state = tuple(converge_state(state, self.edges, self.averages))
         self.reward_model[tuple(temp_state)][int(action)] = reward
 
+        if self.model_batch:
+            if not isinstance(next_state, tuple):
+                next_state = tuple(next_state.tolist())
+            done = is_done(next_state)
+            self.memory.push((state, action, reward, next_state, done))
+            if len(memory) < self.batch_size:
+                return
+            else:
+                # transition is a list of 4-tuples, instead we want 4 vectors (as torch.Tensor's)
+                transitions = self.memory.sample(self.batch_size)
+                state, action, reward, next_state, done = zip(*transitions)
+
         # convert to PyTorch and define types
-        next_state = torch.tensor(list(next_state), dtype=torch.float)
+        if not model_batch:
+            next_state = list(next_state)
+        next_state = torch.tensor(next_state, dtype=torch.float)
 
         # find predicted next state and reward
         pred_next_state, _ = self.model(state, action)
@@ -467,6 +496,8 @@ class DeepDynaQ(DynaQ):
         loss.backward()
         self.model_optimizer.step()
 
+        return
+
 
 if __name__ == "__main__":
 
@@ -479,15 +510,18 @@ if __name__ == "__main__":
     epsilon = 0.2
     capacity = 10000
     experience_replay = True
-    true_gradient = False
-    batch_size = 1
+    true_gradient = True
+    batch_size = 64
+    model_batch = True
 
     if len(sys.argv) > 1 and sys.argv[1] == 'deep':
+        title = 'Episode lengths Deep Dyna-Q'
         memory = ReplayMemory(capacity)
         dynaQ = DeepDynaQ(env,
                           planning_steps=n, discount_factor=discount_factor, lr=1e-3, epsilon=epsilon, memory=memory,
-                          experience_replay=experience_replay, true_gradient=true_gradient, batch_size=batch_size)
+                          experience_replay=experience_replay, true_gradient=true_gradient, batch_size=batch_size, model_batch=model_batch)
     else:
+        title = 'Episode lengths Tabular Dyna-Q'
         dynaQ = TabularDynaQ(env,
                              planning_steps=n, discount_factor=discount_factor, lr=learning_rate, epsilon=epsilon,
                              deterministic=False)
@@ -496,7 +530,8 @@ if __name__ == "__main__":
 
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
-    plt.title('Episode lengths Deep Dyna-Q (nongreedy)')  # NB: lengths == returns
+    non_greedy_title = title + ' (nongreedy)'
+    plt.title(non_greedy_title)  # NB: lengths == returns
     plt.show()
 
     dynaQ.test_model_greedy(100)
@@ -504,5 +539,6 @@ if __name__ == "__main__":
     # plot results
     plt.plot(smooth(dynaQ.episode_lengths, 10))
     print("Average episode length (greedy): {}".format(np.mean(np.array(dynaQ.episode_lengths))))
-    plt.title('Episode lengths Deep Dyna-Q (greedy)')  # NB: lengths == returns
+    greedy_title = title + ' (greedy)'
+    plt.title(greedy_title)  # NB: lengths == returns
     plt.show()
