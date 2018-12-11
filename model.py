@@ -480,7 +480,7 @@ if __name__ == "__main__":
     capacity = 10000
     experience_replay = True
     true_gradient = False
-    batch_size = 64
+    batch_size = 1
 
     if len(sys.argv) > 1 and sys.argv[1] == 'deep':
         memory = ReplayMemory(capacity)
