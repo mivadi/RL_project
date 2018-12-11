@@ -20,6 +20,8 @@ from helpers import q_learning, is_done, ReplayMemory, get_epsilon, smooth
 
 # define seed
 seed = 1
+random.seed(seed)
+torch.manual_seed(seed)
 
 
 class DynaQ(object):
@@ -519,8 +521,6 @@ if __name__ == "__main__":
     batch_size = 64
     model_batch = True
 
-    random.seed(seed)
-    torch.manual_seed(seed)
     env.seed(seed)
 
     if len(sys.argv) > 1 and sys.argv[1] == 'deep':
