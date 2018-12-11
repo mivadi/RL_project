@@ -203,7 +203,7 @@ class DynaQ(object):
 
             # increment steps and update reward
             running_episode_length += 1
-            running_reward += discount_factor ** (running_episode_length - 1) * reward
+            running_reward += self.discount_factor ** (running_episode_length - 1) * reward
 
             # check if episode done
             if not done:
@@ -248,7 +248,7 @@ class DynaQ(object):
                 next_state = tuple(converge_state(next_state, self.edges, self.averages))
 
                 running_episode_length += 1
-                running_reward += discount_factor ** (running_episode_length - 1) * reward
+                running_reward += self.discount_factor ** (running_episode_length - 1) * reward
                 state = next_state
 
             # if done save episode length and reward and reset to 0, reset environment
@@ -271,7 +271,7 @@ class TabularDynaQ(DynaQ):
 
         # initialize the model as a nested dictionary that maps state -> (action -> (next_state, reward))
         self.det_model = defaultdict(lambda: [{"total": 0} for _ in range(env.action_space.n)])
-
+        self.discount_factor = discount_factor
         self.deterministic = deterministic
 
     def action_values(self, state):
@@ -287,7 +287,7 @@ class TabularDynaQ(DynaQ):
 
         # update Q
         self.Q[state][action] = self.Q[state][action] + self._learning_rate * (
-                reward + discount_factor * max_action_value - self.Q[state][action]
+                reward + self.discount_factor * max_action_value - self.Q[state][action]
         )
 
     def model(self, state, action):
@@ -401,7 +401,7 @@ class DeepDynaQ(DynaQ):
             if not isinstance(next_state, tuple):
                 next_state = tuple(next_state.tolist())
             self.memory.push((state, action, reward, next_state, done))
-            if len(memory) < self.batch_size:
+            if len(self.memory) < self.batch_size:
                 return
             else:
                 # transition is a list of 4-tuples, instead we want 4 vectors (as torch.Tensor's)
@@ -481,7 +481,7 @@ class DeepDynaQ(DynaQ):
                 state, action, reward, next_state, done = zip(*transitions)
 
         # convert to PyTorch and define types
-        if not model_batch:
+        if not self.model_batch:
             next_state = list(next_state)
         next_state = torch.tensor(next_state, dtype=torch.float)
 
