@@ -515,7 +515,7 @@ if __name__ == "__main__":
     experience_replay = True
     true_gradient = False
     batch_size = 64
-    model_batch = False
+    model_batch = True
 
     env.seed(seed)
 
